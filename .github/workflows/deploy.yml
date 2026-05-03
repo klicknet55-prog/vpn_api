@@ -1,0 +1,35 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -e
+            cd /opt/vpn_api
+
+            # Pull latest code
+            git pull origin main
+
+            # Install/update dependencies
+            /opt/vpn_api/.venv/bin/pip install -r requirements.txt --quiet
+
+            # Restart API service
+            systemctl restart vpn-api
+            systemctl is-active --quiet vpn-api && echo "Service OK" || (journalctl -u vpn-api -n 20 --no-pager; exit 1)
