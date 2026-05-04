@@ -24,8 +24,15 @@ jobs:
             set -e
             cd /opt/vpn_api
 
-            # Pull latest code
-            git pull origin main
+            if [ -z "${{ secrets.GH_REPO_TOKEN }}" ]; then
+              echo "GH_REPO_TOKEN secret is required for private repository access"
+              exit 1
+            fi
+
+            # Use token only for this fetch command (no token persisted to git config)
+            AUTH_HEADER=$(printf "x-access-token:%s" "${{ secrets.GH_REPO_TOKEN }}" | base64 | tr -d '\n')
+            git -c http.https://github.com/.extraheader="AUTHORIZATION: basic ${AUTH_HEADER}" fetch https://github.com/klicknet55-prog/vpn_api.git main
+            git reset --hard FETCH_HEAD
 
             # Install/update dependencies
             /opt/vpn_api/.venv/bin/pip install -r requirements.txt --quiet
