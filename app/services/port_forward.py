@@ -189,6 +189,17 @@ def create_rule(name: str, protocol: str, listen_port: int, destination_ip: str,
 
 def delete_rule(name: str) -> None:
     with sqlite3.connect(DB_PATH) as conn:
+        proxy_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'proxy_routes'"
+        ).fetchone()
+        if proxy_table_exists:
+            used_by_proxy = conn.execute(
+                "SELECT 1 FROM proxy_routes WHERE port_forward_name = ? LIMIT 1",
+                (name,),
+            ).fetchone()
+            if used_by_proxy:
+                raise PortForwardError("Rule masih dipakai proxy route, hapus proxy route dulu")
+
         row = conn.execute(
             """
             SELECT name, protocol, listen_port, destination_ip, destination_port

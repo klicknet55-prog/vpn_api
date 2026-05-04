@@ -10,6 +10,9 @@ Fitur:
 - Disconnect akun user (best effort berdasarkan proses pppd dari log xl2tpd)
 - Create port forwarding NAT
 - Delete port forwarding NAT
+- Create subdomain proxy ke rule port forwarding terpilih
+- Auto install SSL Let's Encrypt untuk subdomain proxy
+- Opsional auto create/delete A record subdomain via BIND9 (nsupdate)
 
 ## Arsitektur
 
@@ -24,7 +27,9 @@ Jalankan sebagai root:
 
 ```bash
 apt update
-apt install -y python3 python3-venv python3-pip iptables iproute2
+apt install -y python3 python3-venv python3-pip iptables iproute2 apache2 certbot python3-certbot-apache bind9-dnsutils
+a2enmod proxy proxy_http headers rewrite ssl
+systemctl restart apache2
 mkdir -p /opt/vpn_api
 ```
 
@@ -49,6 +54,84 @@ Isi:
 ```env
 API_USERNAME=admin
 API_PASSWORD=passwordkuat123
+PROXY_BASE_DOMAIN=example.com
+LETSENCRYPT_EMAIL=admin@example.com
+
+# Opsional BIND9 (aktifkan true jika ingin API auto create A record)
+BIND9_AUTO_A_RECORD=false
+BIND9_ZONE=example.com
+BIND9_SERVER=127.0.0.1
+BIND9_KEY_PATH=/etc/bind/keys/vpn-api.key
+BIND9_A_TARGET_IP=203.0.113.10
+BIND9_TTL=300
+```
+
+Jika `BIND9_AUTO_A_RECORD=true`, endpoint create/delete proxy route akan otomatis menambah/menghapus A record subdomain via `nsupdate`.
+Pastikan key TSIG untuk `nsupdate` sudah diizinkan pada zone BIND9.
+
+### Contoh konfigurasi untuk server ini
+
+```env
+PROXY_BASE_DOMAIN=klickerz.my.id
+LETSENCRYPT_EMAIL=klicknet55@gmail.com
+BIND9_AUTO_A_RECORD=true
+BIND9_ZONE=klickerz.my.id
+BIND9_SERVER=116.251.216.196
+BIND9_KEY_PATH=/etc/bind/keys/vpn-api.key
+BIND9_A_TARGET_IP=116.251.216.196
+BIND9_TTL=300
+```
+
+Nilai `BIND9_KEY_PATH=/path/ke/key-tsig.key` yang Anda kirim masih placeholder. Untuk implementasi nyata, saya sarankan path seperti `/etc/bind/keys/vpn-api.key`.
+
+### Contoh setup TSIG untuk BIND9
+
+Buat key TSIG:
+
+```bash
+install -d -m 700 /etc/bind/keys
+tsig-keygen -a hmac-sha256 vpn-api-update > /etc/bind/keys/vpn-api.key
+chmod 600 /etc/bind/keys/vpn-api.key
+```
+
+Contoh isi key yang di-generate akan mirip seperti ini:
+
+```conf
+key "vpn-api-update" {
+  algorithm hmac-sha256;
+  secret "GANTI_DENGAN_SECRET_GENERATED";
+};
+```
+
+Include key di konfigurasi BIND9, misalnya di `named.conf.local`:
+
+```conf
+include "/etc/bind/keys/vpn-api.key";
+
+zone "klickerz.my.id" {
+  type master;
+  file "/etc/bind/db.klickerz.my.id";
+  update-policy {
+    grant vpn-api-update zonesub ANY;
+  };
+};
+```
+
+Jika Anda ingin lebih ketat hanya untuk A record, gunakan policy yang lebih sempit sesuai kebutuhan operasional zone Anda.
+
+Setelah itu reload BIND9:
+
+```bash
+named-checkconf
+systemctl reload bind9
+systemctl status bind9
+```
+
+Terakhir, isi `.env` aplikasi dengan nilai yang sama dan restart service API:
+
+```bash
+systemctl restart vpn-api
+systemctl status vpn-api
 ```
 
 ## Menjalankan API
@@ -120,6 +203,40 @@ curl -X POST http://127.0.0.1:8080/port-forwardings \
 
 ```bash
 curl -X DELETE http://127.0.0.1:8080/port-forwardings/web-1 \
+  -u admin:passwordkuat123
+```
+
+8) Create proxy subdomain + SSL dari port forwarding terpilih
+
+```bash
+curl -X POST http://127.0.0.1:8080/proxy-routes \
+  -u admin:passwordkuat123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"app-user1",
+    "subdomain":"user1",
+    "port_forward_name":"web-1"
+  }'
+```
+
+9) Cek subdomain tersedia (DB + DNS BIND9)
+
+```bash
+curl -X GET http://127.0.0.1:8080/proxy-routes/check-subdomain/user1 \
+  -u admin:passwordkuat123
+```
+
+10) List proxy route
+
+```bash
+curl -X GET http://127.0.0.1:8080/proxy-routes \
+  -u admin:passwordkuat123
+```
+
+11) Delete proxy route
+
+```bash
+curl -X DELETE http://127.0.0.1:8080/proxy-routes/app-user1 \
   -u admin:passwordkuat123
 ```
 
@@ -235,6 +352,6 @@ $response = apiRequest("POST", "/users/user1/disable");
 ```
 
 ### Keamanan tambahan yang disarankan
-- Jalankan API di belakang **HTTPS** (Nginx + Let's Encrypt) agar Basic Auth tidak dikirim plaintext.
+- Jalankan API di belakang **HTTPS** (Apache + Let's Encrypt) agar Basic Auth tidak dikirim plaintext.
 - Simpan kredensial di environment variable atau secret manager, **jangan hardcode** di kode frontend.
 - Untuk produksi, pertimbangkan ganti Basic Auth dengan **API Key** atau **JWT**.

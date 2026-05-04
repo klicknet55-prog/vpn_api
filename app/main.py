@@ -9,6 +9,9 @@ from app.schemas import (
     MessageResponse,
     PortForwardCreateRequest,
     PortForwardRule,
+    ProxyRoute,
+    ProxyRouteCreateRequest,
+    SubdomainAvailability,
     UserCreateRequest,
 )
 from app.services.port_forward import (
@@ -17,6 +20,14 @@ from app.services.port_forward import (
     delete_rule,
     init_db,
     list_rules,
+)
+from app.services.proxy import (
+    ProxyError,
+    check_subdomain_availability,
+    create_route,
+    delete_route,
+    init_db as init_proxy_db,
+    list_routes,
 )
 from app.services.users import UserServiceError, create_user, delete_user, disable_user, disconnect_user, enable_user
 
@@ -45,6 +56,7 @@ app = FastAPI(title="VPN API Management", version="1.0.0")
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    init_proxy_db()
 
 
 @app.get("/health", response_model=MessageResponse)
@@ -144,4 +156,71 @@ def api_delete_port_forwarding(name: str, _: None = Depends(require_auth)) -> Me
         delete_rule(name)
         return MessageResponse(message="Rule port forwarding dihapus")
     except PortForwardError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/proxy-routes", response_model=list[ProxyRoute])
+def api_list_proxy_routes(_: None = Depends(require_auth)) -> list[ProxyRoute]:
+    routes = list_routes()
+    return [
+        ProxyRoute(
+            name=r.name,
+            subdomain=r.subdomain,
+            domain=r.domain,
+            port_forward_name=r.port_forward_name,
+            upstream_ip=r.upstream_ip,
+            upstream_port=r.upstream_port,
+            ssl_enabled=bool(r.ssl_enabled),
+            created_at=r.created_at,
+        )
+        for r in routes
+    ]
+
+
+@app.get("/proxy-routes/check-subdomain/{subdomain}", response_model=SubdomainAvailability)
+def api_check_subdomain_availability(subdomain: str, _: None = Depends(require_auth)) -> SubdomainAvailability:
+    try:
+        check = check_subdomain_availability(subdomain)
+        return SubdomainAvailability(
+            subdomain=check.subdomain,
+            domain=check.domain,
+            available=check.available,
+            exists_in_db=check.exists_in_db,
+            exists_in_dns=check.exists_in_dns,
+            dns_checked=check.dns_checked,
+            dns_records=check.dns_records,
+            reason=check.reason,
+        )
+    except ProxyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/proxy-routes", response_model=ProxyRoute)
+def api_create_proxy_route(payload: ProxyRouteCreateRequest, _: None = Depends(require_auth)) -> ProxyRoute:
+    try:
+        route = create_route(
+            name=payload.name,
+            subdomain=payload.subdomain,
+            port_forward_name=payload.port_forward_name,
+        )
+        return ProxyRoute(
+            name=route.name,
+            subdomain=route.subdomain,
+            domain=route.domain,
+            port_forward_name=route.port_forward_name,
+            upstream_ip=route.upstream_ip,
+            upstream_port=route.upstream_port,
+            ssl_enabled=bool(route.ssl_enabled),
+            created_at=route.created_at,
+        )
+    except ProxyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/proxy-routes/{name}", response_model=MessageResponse)
+def api_delete_proxy_route(name: str, _: None = Depends(require_auth)) -> MessageResponse:
+    try:
+        delete_route(name)
+        return MessageResponse(message="Proxy route dihapus")
+    except ProxyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
