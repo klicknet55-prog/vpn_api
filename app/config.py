@@ -11,6 +11,7 @@ APACHE_SITES_AVAILABLE_PATH = Path("/etc/apache2/sites-available")
 APACHE_SITES_ENABLED_PATH = Path("/etc/apache2/sites-enabled")
 
 IPTABLES_BIN = "iptables"
+IPTABLES_SAVE_BIN = "iptables-save"
 SYSTEMCTL_BIN = "systemctl"
 JOURNALCTL_BIN = "journalctl"
 APACHECTL_BIN = "apache2ctl"

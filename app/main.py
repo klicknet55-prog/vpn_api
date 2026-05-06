@@ -20,6 +20,7 @@ from app.services.port_forward import (
     delete_rule,
     init_db,
     list_rules,
+    restore_rules_from_db,
 )
 from app.services.proxy import (
     ProxyError,
@@ -57,6 +58,8 @@ app = FastAPI(title="VPN API Management", version="1.0.0")
 def on_startup() -> None:
     init_db()
     init_proxy_db()
+    # Restore iptables rules dari DB saat service restart/reboot
+    restore_rules_from_db()
 
 
 @app.get("/health", response_model=MessageResponse)

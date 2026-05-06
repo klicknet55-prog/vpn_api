@@ -2,7 +2,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.config import DB_PATH, IPTABLES_BIN
+from app.config import DB_PATH, IPTABLES_BIN, IPTABLES_SAVE_BIN
 from app.services.system import CommandError, run_command
 
 
@@ -58,6 +58,36 @@ def _run_iptables(command: list[str]) -> None:
         raise PortForwardError(str(exc)) from exc
 
 
+def _ensure_masquerade() -> None:
+    """Pastikan MASQUERADE rule ada di POSTROUTING agar traffic reply bisa balik."""
+    try:
+        run_command(
+            [IPTABLES_BIN, "-t", "nat", "-C", "POSTROUTING", "-j", "MASQUERADE"],
+            check=True,
+        )
+    except CommandError:
+        # Rule belum ada, tambahkan
+        try:
+            run_command(
+                [IPTABLES_BIN, "-t", "nat", "-A", "POSTROUTING", "-j", "MASQUERADE"],
+                check=True,
+            )
+        except CommandError as exc:
+            raise PortForwardError(f"Gagal tambah MASQUERADE: {exc}") from exc
+
+
+def _save_iptables() -> None:
+    """Simpan rules iptables agar persist setelah reboot."""
+    try:
+        result = run_command([IPTABLES_SAVE_BIN], check=True)
+        rules_path = Path("/etc/iptables/rules.v4")
+        rules_path.parent.mkdir(parents=True, exist_ok=True)
+        rules_path.write_text(result.stdout + "\n", encoding="utf-8")
+    except Exception:
+        # Tidak fatal jika gagal simpan (rules tetap aktif sampai reboot)
+        pass
+
+
 def _apply_rule(name: str, protocol: str, listen_port: int, destination_ip: str, destination_port: int) -> None:
     comment = f"vpn-api:{name}"
 
@@ -103,6 +133,11 @@ def _apply_rule(name: str, protocol: str, listen_port: int, destination_ip: str,
             "ACCEPT",
         ]
     )
+
+    # Pastikan MASQUERADE ada agar traffic reply bisa balik ke client
+    _ensure_masquerade()
+    # Simpan rules agar persist setelah reboot
+    _save_iptables()
 
 
 def _delete_rule(name: str, protocol: str, listen_port: int, destination_ip: str, destination_port: int) -> None:
@@ -215,6 +250,47 @@ def delete_rule(name: str) -> None:
             _delete_rule(*row)
             conn.execute("DELETE FROM nat_rules WHERE name = ?", (name,))
             conn.commit()
+            _save_iptables()
         except PortForwardError:
             conn.rollback()
             raise
+
+
+def restore_rules_from_db() -> None:
+    """Restore semua iptables rules dari DB saat service startup/reboot."""
+    try:
+        rules = list_rules()
+    except Exception:
+        return
+
+    _ensure_masquerade()
+
+    for rule in rules:
+        try:
+            # Cek apakah rule sudah ada (hindari duplikat)
+            run_command(
+                [
+                    IPTABLES_BIN, "-t", "nat", "-C", "PREROUTING",
+                    "-p", rule.protocol,
+                    "--dport", str(rule.listen_port),
+                    "-m", "comment", "--comment", f"vpn-api:{rule.name}",
+                    "-j", "DNAT",
+                    "--to-destination", f"{rule.destination_ip}:{rule.destination_port}",
+                ],
+                check=True,
+            )
+            # Rule sudah ada, skip
+        except CommandError:
+            # Rule belum ada, apply
+            try:
+                _apply_rule(
+                    rule.name,
+                    rule.protocol,
+                    rule.listen_port,
+                    rule.destination_ip,
+                    rule.destination_port,
+                )
+            except PortForwardError:
+                pass  # Jangan crash startup jika satu rule gagal
+
+    _save_iptables()
