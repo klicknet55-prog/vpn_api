@@ -355,3 +355,6 @@ $response = apiRequest("POST", "/users/user1/disable");
 - Jalankan API di belakang **HTTPS** (Apache + Let's Encrypt) agar Basic Auth tidak dikirim plaintext.
 - Simpan kredensial di environment variable atau secret manager, **jangan hardcode** di kode frontend.
 - Untuk produksi, pertimbangkan ganti Basic Auth dengan **API Key** atau **JWT**.
+
+
+<!-- Security scan triggered at 2026-08-31 17:17:21 -->
